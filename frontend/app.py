@@ -14,6 +14,7 @@ from __future__ import annotations
 import os
 import sys
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import folium
 import plotly.graph_objects as go
@@ -29,11 +30,29 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from frontend.api_client import APIError, PalmMonitorClient
 
+if TYPE_CHECKING:
+    from frontend.local_backend import LocalBackend
+
 # ----------------------------------------------------------------------
 # Configuration & session bootstrap
 # ----------------------------------------------------------------------
 
 load_dotenv(PROJECT_ROOT / ".env")
+
+# ----------------------------------------------------------------------
+# Cloud mode (Streamlit Community Cloud): single-process deployment.
+# Secrets set in the Streamlit Cloud UI are surfaced via st.secrets and
+# injected into the environment before backend settings load.
+# ----------------------------------------------------------------------
+CLOUD_MODE = os.getenv("PALM_CLOUD", "").lower() in ("1", "true", "yes")
+if CLOUD_MODE:
+    try:
+        for key in ("DATABASE_URL", "GLM_API_KEY", "SECRET_KEY"):
+            value = st.secrets.get(key)
+            if value:
+                os.environ.setdefault(key, str(value))
+    except st.errors.StreamlitAPIException:  # secrets file absent locally
+        pass
 
 API_BASE_URL = os.getenv("STREAMLIT_API_URL", "http://localhost:8000")
 
@@ -71,8 +90,20 @@ st.markdown(
 )
 
 
-def get_client() -> PalmMonitorClient:
-    """One authenticated client per browser session."""
+@st.cache_resource(show_spinner=False)
+def _cloud_backend() -> LocalBackend:
+    from frontend.local_backend import LocalBackend
+
+    return LocalBackend(
+        database_url=os.environ["DATABASE_URL"],
+        glm_api_key=os.environ.get("GLM_API_KEY", ""),
+    )
+
+
+def get_client() -> PalmMonitorClient | LocalBackend:
+    """One authenticated client per browser session (or the shared cloud backend)."""
+    if CLOUD_MODE:
+        return _cloud_backend()
     if "client" not in st.session_state or st.session_state.get("client_token") != st.session_state.get("token"):
         st.session_state.client = PalmMonitorClient(
             API_BASE_URL, token=st.session_state.get("token")
@@ -85,9 +116,45 @@ def is_logged_in() -> bool:
     return bool(st.session_state.get("token"))
 
 
+def ctx_user() -> dict | None:
+    """Signed-in user dict (cloud mode) or None (HTTP mode passes tokens)."""
+    return st.session_state.get("cloud_user")
+
+
 # ----------------------------------------------------------------------
 # Authentication view
 # ----------------------------------------------------------------------
+
+
+def _do_login(email: str, password: str) -> None:
+    """Shared login for both modes; raises with a friendly message."""
+    if CLOUD_MODE:
+
+        backend = _cloud_backend()
+        st.session_state.cloud_user = backend.login_user(email.strip(), password)
+        st.session_state.token = "local-session"
+        return
+
+    client = PalmMonitorClient(API_BASE_URL)
+    token = client.login(email.strip(), password)
+    st.session_state.token = token
+    st.session_state.client = client
+    st.session_state.client_token = token
+
+
+def _do_register(email: str, password: str, full_name: str) -> None:
+    if CLOUD_MODE:
+        backend = _cloud_backend()
+        backend.register(email.strip(), password, full_name.strip())
+        _do_login(email, password)
+        return
+
+    client = PalmMonitorClient(API_BASE_URL)
+    client.register(email.strip(), password, full_name.strip())
+    token = client.login(email.strip(), password)
+    st.session_state.token = token
+    st.session_state.client = client
+    st.session_state.client_token = token
 
 
 def render_login() -> None:
@@ -109,14 +176,17 @@ def render_login() -> None:
             submitted = st.form_submit_button("Sign in", use_container_width=True)
         if submitted:
             try:
-                client = PalmMonitorClient(API_BASE_URL)
-                token = client.login(email.strip(), password)
-                st.session_state.token = token
-                st.session_state.client = client
-                st.session_state.client_token = token
+                _do_login(email, password)
                 st.rerun()
-            except APIError as exc:
-                st.error(exc.detail)
+            except (APIError, Exception) as exc:  # noqa: BLE001 - friendly msg
+                st.error(getattr(exc, "detail", None) or str(exc))
+
+    with register_tab, st.form("register"):
+        full_name = st.text_input("Full name", key="reg_name")
+        email = st.text_input("Email", key="reg_email")
+        password = st.text_input(
+            "Password (min 8 chars)", type="password", key="reg_pw"
+        )
 
     with register_tab:
         with st.form("register"):
@@ -127,20 +197,18 @@ def render_login() -> None:
             )
             submitted = st.form_submit_button("Create account", use_container_width=True)
         if submitted:
-            client = PalmMonitorClient(API_BASE_URL)
             try:
-                client.register(email.strip(), password, full_name.strip())
-                token = client.login(email.strip(), password)
-                st.session_state.token = token
-                st.session_state.client = client
-                st.session_state.client_token = token
+                _do_register(email, password, full_name)
                 st.success("Account created — welcome!")
                 st.rerun()
-            except APIError as exc:
-                st.error(exc.detail)
+            except (APIError, Exception) as exc:  # noqa: BLE001 - friendly msg
+                st.error(getattr(exc, "detail", None) or str(exc))
 
     st.divider()
-    st.caption(f"Backend: {API_BASE_URL} — start it with `python run_api.py`")
+    if CLOUD_MODE:
+        st.caption("🌴 Single-process cloud deployment · Neon PostgreSQL · Gemini AI")
+    else:
+        st.caption(f"Backend: {API_BASE_URL} — start it with `python run_api.py`")
 
 
 # ----------------------------------------------------------------------
@@ -151,8 +219,12 @@ def render_login() -> None:
 def render_dashboard(client: PalmMonitorClient) -> None:
     st.subheader("Farm health overview")
     try:
-        palms = client.list_palms()
-        inspections = client.recent_inspections(limit=100)
+        user = ctx_user()
+        palms = client.list_palms(user=user) if CLOUD_MODE else client.list_palms()
+        inspections = (
+            client.recent_inspections(limit=100, user=user) if CLOUD_MODE
+            else client.recent_inspections(limit=100)
+        )
     except APIError as exc:
         st.error(f"Could not load farm data: {exc.detail}")
         return
@@ -367,8 +439,12 @@ def render_inspect(client: PalmMonitorClient, palms: list[dict]) -> None:
     ):
         with st.spinner("Analysing the image with the vision model…"):
             try:
-                result = client.inspect(
-                    palm["id"], image_bytes, filename, notes=notes or None
+                result = (
+                    client.inspect(palm["id"], image_bytes, filename,
+                                   notes=notes or None, user=ctx_user())
+                    if CLOUD_MODE else
+                    client.inspect(palm["id"], image_bytes, filename,
+                                   notes=notes or None)
                 )
             except APIError as exc:
                 st.error(f"Inspection failed: {exc.detail}")
@@ -425,7 +501,8 @@ def render_diagnosis_report(report: dict) -> None:
     with left:
         try:
             st.image(
-                client_image_bytes(inspection["image_url"]), width=280,
+                client_image_bytes(inspection["image_url"], log=inspection),
+                width=280,
                 caption=f"Inspected {inspection['inspected_at'][:16].replace('T', ' ')}",
             )
         except APIError:
@@ -515,7 +592,9 @@ def _report_markdown(report: dict) -> str:
     return "\n".join(lines)
 
 
-def client_image_bytes(image_url: str) -> bytes:
+def client_image_bytes(image_url: str, log: dict | None = None) -> bytes:
+    if CLOUD_MODE:
+        return _cloud_backend().get_image_bytes(image_url, log=log)
     client: PalmMonitorClient = st.session_state.client
     return client.get_image_bytes(image_url)
 
@@ -546,6 +625,7 @@ def render_trees(client: PalmMonitorClient) -> None:
                     client.create_palm(
                         code.strip(), latitude, longitude,
                         field_name=field or None, variety=variety or None,
+                        user=ctx_user() if CLOUD_MODE else None,
                     )
                     st.success(f"Tree {code.strip()} registered.")
                     st.rerun()
@@ -593,8 +673,8 @@ def render_trees(client: PalmMonitorClient) -> None:
             details = log.get("detection_details") or {}
             col_img, col_txt = st.columns([1, 3])
             try:
-                col_img.image(client_image_bytes(log["image_url"]), width=140)
-            except APIError:
+                col_img.image(client_image_bytes(log["image_url"], log=log), width=140)
+            except Exception:  # noqa: BLE001 - missing embedded photo
                 col_img.caption("photo missing")
             if log.get("treatment_recommendation"):
                 col_txt.markdown("**Treatment**")
@@ -616,7 +696,10 @@ def render_trees(client: PalmMonitorClient) -> None:
 def render_alerts(client: PalmMonitorClient) -> None:
     st.subheader("Alerts — trees needing attention")
     try:
-        inspections = client.recent_inspections(limit=100)
+        inspections = (
+            client.recent_inspections(limit=100, user=ctx_user()) if CLOUD_MODE
+            else client.recent_inspections(limit=100)
+        )
     except APIError as exc:
         st.error(exc.detail)
         return
@@ -654,9 +737,12 @@ def main() -> None:
 
     client = get_client()
     try:
-        user = client.me()
-    except APIError as exc:
-        st.error(f"Session expired or backend unreachable ({exc.detail}). Sign in again.")
+        user = (
+            client.me(st.session_state.cloud_user["id"]) if CLOUD_MODE
+            else client.me()
+        )
+    except Exception as exc:  # noqa: BLE001 - friendly session message
+        st.error(f"Session expired or backend unreachable ({getattr(exc, 'detail', exc)}). Sign in again.")
         st.session_state.pop("token", None)
         st.rerun()
         return

@@ -154,3 +154,29 @@ DATABASE_URL="$(cat data/neon_url.txt)" python scripts/create_admin.py \
   sign in again).
 - **Backups:** database snapshots via your provider; `uploads/` volume
   snapshots or rsync the volume.
+
+---
+
+## 7. Option E — Streamlit Community Cloud (100% free, no card, 24/7)
+
+Single-process deployment: the Streamlit app runs the ENTIRE system
+in-process (auth, Neon Postgres, Gemini diagnosis) — no backend server.
+
+1. Go to **https://share.streamlit.io** → sign in with GitHub.
+2. **New app** → repo `Ali-2003-ux/date-palm-health-monitor`, branch
+   `main`, main file path **`frontend/app.py`** → Deploy.
+3. App **Settings → Secrets** → paste (template: `data/streamlit_secrets.example.toml`):
+   ```toml
+   PALM_CLOUD = "1"
+   DATABASE_URL = "<your Neon connection string>"
+   GLM_API_KEY = "<your Gemini API key>"
+   SECRET_KEY = "<long random string>"
+   ```
+4. Save — the app restarts into cloud mode. URL: `https://<app-name>.streamlit.app`
+
+Verified locally in `PALM_CLOUD=1` mode against Neon + Gemini: login,
+palms, real-photo diagnosis (cause/symptoms/treatment/prevention),
+history with embedded photos. Notes: inspection photos are stored
+base64-embedded (≤1024 px) in Neon because cloud filesystems are
+ephemeral; the SmolVLM fallback is disabled in cloud mode (1 GB RAM) —
+if Gemini quota is exhausted the UI shows a friendly retry message.

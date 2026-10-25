@@ -1,0 +1,9 @@
+# Streamlit runtime configuration (local + Streamlit Community Cloud).
+[server]
+headless = true
+port = 8501
+# Palm photos are 1-15 MB; allow a little headroom.
+maxUploadSize = 25
+
+[browser]
+gatherUsageStats = false
