@@ -1,0 +1,5 @@
+# Local open-source VLM provider (keyless diagnosis).
+# Installed inside the deployment image; torch comes from the CPU wheel
+# index separately (see hf-space/Dockerfile.hf).
+
+transformers>=4.49,<5

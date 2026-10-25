@@ -24,15 +24,27 @@ docker build -q -t palm-hf:local -f hf-space/Dockerfile.hf . > /dev/null
 
 echo "[redeploy] swapping container..."
 docker rm -f palm-live > /dev/null 2>&1 || true
+
+# Keyless diagnosis: local open-source VLM. Model weights are cached on a
+# host volume when available (avoids re-downloading ~1 GB per container).
+MODEL_MOUNT=""
+MODEL_DIR="${PALM_MODEL_DIR:-/d/palm-models}"
+if [ -d "$MODEL_DIR" ]; then
+  MODEL_MOUNT="-v $(cygpath -w "$MODEL_DIR" 2>/dev/null || echo "$MODEL_DIR"):/app/ml/models/hf"
+fi
+
 # STREAMLIT_API_URL points at the in-container nginx loopback: the dashboard
 # never depends on the public tunnel for API calls.
 docker run -d --name palm-live --restart unless-stopped -p 7860:7860 \
   -e DATABASE_URL="$(cat data/neon_url.txt)" \
   -e SECRET_KEY="$(cat data/secret_key.txt)" \
   $GLM_ARG \
+  -e VISION_PROVIDER=local_vlm \
+  -e INFERENCE_TIMEOUT_SECONDS=180 \
   -e ENVIRONMENT=production \
   -e DEBUG=false \
   -e STREAMLIT_API_URL=http://localhost:7860 \
+  $MODEL_MOUNT \
   palm-hf:local > /dev/null
 
 echo "[redeploy] waiting for boot..."

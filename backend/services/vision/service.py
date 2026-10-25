@@ -1,9 +1,14 @@
 """Vision service — the single entry point for palm health analysis.
 
-Validates and preprocesses the uploaded image, dispatches to the
-configured inference provider (GLM-4V API by default) and falls back to
-the local CNN when the primary provider is unavailable and the optional
-PyTorch stack is installed.
+Validates and preprocesses the uploaded image, then dispatches to the
+configured inference provider:
+
+  * ``glm``       — GLM-4V cloud API (needs a key)
+  * ``local_vlm`` — keyless open-source VLM in-container (SmolVLM)
+  * ``local_cnn`` — locally trained MobileNetV2 (needs weights)
+
+If the primary provider fails, the service degrades through the other
+local providers before giving up.
 """
 
 from __future__ import annotations
@@ -14,6 +19,7 @@ from backend.core.config import Settings, get_settings
 from backend.core.logging import get_logger
 from backend.services.vision.glm_client import GLMVisionClient
 from backend.services.vision.local_cnn import LocalCNNPredictor
+from backend.services.vision.local_vlm import LocalVLM
 from backend.services.vision.preprocessing import encode_jpeg, preprocess
 from backend.services.vision.results import (
     DiagnosisResult,
@@ -33,10 +39,12 @@ class VisionService:
         settings: Settings | None = None,
         glm_client: GLMVisionClient | None = None,
         local_predictor: LocalCNNPredictor | None = None,
+        local_vlm: LocalVLM | None = None,
     ) -> None:
         self._settings = settings or get_settings()
         self._glm = glm_client or GLMVisionClient(self._settings)
-        self._local = local_predictor  # None => fallback disabled
+        self._local = local_predictor  # None => CNN fallback disabled
+        self._vlm = local_vlm if local_vlm is not None else LocalVLM(self._settings)
         self._local_load_attempted = False
 
     # ------------------------------------------------------------------
@@ -64,18 +72,32 @@ class VisionService:
     # ------------------------------------------------------------------
     async def _diagnose(self, jpeg, image, quality, filename) -> DiagnosisResult:
         provider = self._settings.VISION_PROVIDER
+
+        if provider == "local_vlm":
+            return await self._run_vlm(image, quality)
         if provider == "local_cnn":
             return await self._run_local(image, quality)
 
-        # Primary: GLM-4V API. On failure, degrade to local CNN if possible.
+        # Primary: GLM-4V API. Degrade to local providers on failure.
         try:
             return await self._glm.analyze(jpeg, quality, filename)
         except InferenceError as exc:
-            logger.warning("GLM provider failed (%s); trying local fallback.", exc)
-            try:
-                return await self._run_local(image, quality)
-            except ProviderUnavailableError:
-                raise exc from None
+            logger.warning("GLM provider failed (%s); trying local fallbacks.", exc)
+            for fallback in (self._run_vlm, self._run_local):
+                try:
+                    return await fallback(image, quality)
+                except ProviderUnavailableError:
+                    continue
+            raise exc from None
+
+    async def _run_vlm(self, image, quality) -> DiagnosisResult:
+        """Keyless open-source VLM (CPU) — our default offline provider."""
+        if not self._vlm.available:
+            raise ProviderUnavailableError(
+                "Local VLM unavailable: torch/transformers not installed."
+            )
+        # CPU-bound inference — keep the event loop responsive.
+        return await asyncio.to_thread(self._vlm.predict, image, quality)
 
     async def _run_local(self, image, quality) -> DiagnosisResult:
         """Run the local CNN, loading weights lazily on first use."""
@@ -96,13 +118,14 @@ class VisionService:
         return await asyncio.to_thread(self._local.predict, image, quality)
 
     # ------------------------------------------------------------------
-    # Post-processing policy
-    # ------------------------------------------------------------------
     # Diagnostics
     # ------------------------------------------------------------------
     async def provider_status(self) -> dict:
         """Health of the configured inference provider (for /diagnostics)."""
-        if self._settings.VISION_PROVIDER == "local_cnn":
+        provider = self._settings.VISION_PROVIDER
+        if provider == "local_vlm":
+            return await asyncio.to_thread(self._vlm.verify_connection)
+        if provider == "local_cnn":
             available = self._local is not None or self._settings.MODEL_WEIGHTS_PATH.is_file()
             return {
                 "provider": "local_cnn",
@@ -118,6 +141,8 @@ class VisionService:
             }
         return await self._glm.verify_connection()
 
+    # ------------------------------------------------------------------
+    # Post-processing policy
     # ------------------------------------------------------------------
     def _apply_threshold_policy(self, result: DiagnosisResult) -> None:
         """Flag low-confidence diagnoses so the UI can ask for a re-shoot."""
