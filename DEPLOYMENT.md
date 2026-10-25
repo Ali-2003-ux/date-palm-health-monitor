@@ -98,6 +98,41 @@ start commands in the `Procfile`.
 
 ---
 
+## 4.5 Option D — Hugging Face Spaces (free, no credit card)
+
+Single container, single public URL: nginx on :7860 routes `/api/*`,
+`/media/*`, `/docs` to FastAPI and everything else (incl. Streamlit
+websockets) to the dashboard; supervisord manages all processes. Uses a
+free external Postgres (e.g. [Neon](https://neon.tech)) —
+`hf-space/` holds the configs, verified to run in ~165 MB of RAM.
+
+```bash
+pip install huggingface_hub
+
+# one-time credentials (kept out of chat/git via files):
+#   data/hf_token.txt   <- WRITE token from huggingface.co/settings/tokens
+#   data/neon_url.txt   <- postgres://... connection string from neon.tech
+python scripts/deploy_hf.py \
+    --username YOUR_HF_NAME \
+    --token-file data/hf_token.txt \
+    --database-url-file data/neon_url.txt \
+    --glm-api-key-file data/glm_key.txt      # optional
+```
+
+Public URL: `https://<username>-date-palm-health-monitor.hf.space`
+(build ~5–10 min). Free-tier caveats: the Space sleeps after 48 h of
+inactivity (ping `/health` on a schedule to keep it warm), and the
+filesystem is ephemeral — inspection photos are lost on rebuild unless
+you attach persistent storage or extend storage to S3.
+
+Seed the admin against the external database from your machine:
+```bash
+DATABASE_URL="$(cat data/neon_url.txt)" python scripts/create_admin.py \
+    you@farm.com "Strong#Pass1" "Admin"
+```
+
+---
+
 ## 5. Post-deploy checklist
 
 - [ ] `GET https://<api>/health` returns `{"status": "ok", "environment": "production"}`
