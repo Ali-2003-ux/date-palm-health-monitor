@@ -60,6 +60,10 @@ class DiagnosisResult(BaseModel):
     status: InspectionStatus
     symptoms: list[str] = Field(default_factory=list)
     treatment_steps: list[str] = Field(default_factory=list)
+    #: Causal agent / mechanism (knowledge-base grounded when known).
+    cause: str | None = None
+    #: Preventive measures (knowledge-base grounded when known).
+    prevention: list[str] = Field(default_factory=list)
     assessment: str | None = None
     provider: str
     model: str

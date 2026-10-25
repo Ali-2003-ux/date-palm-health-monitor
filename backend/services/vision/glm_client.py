@@ -385,6 +385,20 @@ class GLMVisionClient:
         assessment = payload.get("assessment")
         assessment = str(assessment) if assessment else None
 
+        # Knowledge-base grounding: cause + prevention come from the catalog
+        # when the disease is known (the model may add detail via symptoms).
+        cause = catalog_entry.cause if catalog_entry else None
+        if catalog_entry:
+            prevention = list(catalog_entry.prevention)
+        elif not is_healthy:
+            prevention = [
+                ("Re-inspect the palm within 2 weeks and photograph any "
+                "change."),
+                "Consult a local agronomist for an on-site confirmation.",
+            ]
+        else:
+            prevention = []
+
         return DiagnosisResult(
             detected_disease=display_name,
             severity=None if is_healthy else severity,
@@ -392,6 +406,8 @@ class GLMVisionClient:
             status=status,
             symptoms=symptoms,
             treatment_steps=treatment_steps,
+            cause=cause,
+            prevention=prevention,
             assessment=assessment,
             provider="glm",
             model=model,

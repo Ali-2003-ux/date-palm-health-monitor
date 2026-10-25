@@ -67,7 +67,11 @@ class LocalVLM:
         return torch is not None
 
     def _ensure_loaded(self) -> None:
-        """Lazy-load model + processor once (slow first call)."""
+        """Lazy-load model + processor once (slow first call).
+
+        One automatic retry covers transient failures (disk hiccup, cache
+        partial write) so a single bad load doesn't kill the provider.
+        """
         if self._model is not None:
             return
         if self._load_attempted and self._model is None:
@@ -82,15 +86,26 @@ class LocalVLM:
             )
         logger.info("Loading local VLM %s (cache: %s)...", self._model_id, self._cache_dir)
         started = time.monotonic()
-        self._processor = AutoProcessor.from_pretrained(
-            self._model_id, cache_dir=self._cache_dir
-        )
-        self._model = AutoModelForImageTextToText.from_pretrained(
-            self._model_id,
-            cache_dir=self._cache_dir,
-            dtype=torch.float32,
-            _attn_implementation="eager",
-        )
+        for attempt in (1, 2):
+            try:
+                self._processor = AutoProcessor.from_pretrained(
+                    self._model_id, cache_dir=self._cache_dir
+                )
+                self._model = AutoModelForImageTextToText.from_pretrained(
+                    self._model_id,
+                    cache_dir=self._cache_dir,
+                    dtype=torch.float32,
+                    _attn_implementation="eager",
+                )
+                break
+            except Exception as exc:
+                self._processor = None
+                self._model = None
+                if attempt == 2:
+                    raise ProviderUnavailableError(
+                        f"Local VLM failed to load after retry: {exc}"
+                    ) from exc
+                logger.warning("VLM load attempt %d failed (%s); retrying...", attempt, exc)
         self._model.eval()
         logger.info(
             "Local VLM loaded in %.1fs", time.monotonic() - started
