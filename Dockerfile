@@ -28,10 +28,13 @@ RUN useradd --create-home --uid 1000 user
 
 WORKDIR /app
 
-COPY requirements.txt .
+COPY requirements.txt requirements-vlm.txt ./
 RUN python -m venv /app/.venv \
     && /app/.venv/bin/pip install --no-cache-dir --upgrade pip \
-    && /app/.venv/bin/pip install --no-cache-dir -r requirements.txt
+    && /app/.venv/bin/pip install --no-cache-dir -r requirements.txt \
+    && /app/.venv/bin/pip install --no-cache-dir \
+        --index-url https://download.pytorch.org/whl/cpu torch \
+    && /app/.venv/bin/pip install --no-cache-dir -r requirements-vlm.txt
 
 COPY --chown=user:user alembic.ini ./
 COPY --chown=user:user backend/ backend/
@@ -44,7 +47,7 @@ COPY --chown=user:user hf-space/supervisord.conf /etc/supervisor/conf.d/app.conf
 COPY --chown=user:user hf-space/hf-entrypoint.sh /usr/local/bin/entrypoint.sh
 
 RUN chmod +x /usr/local/bin/entrypoint.sh \
-    && mkdir -p /app/uploads /run /var/log/supervisor /var/lib/nginx \
+    && mkdir -p /app/uploads /app/ml/models/hf /run /var/log/supervisor /var/lib/nginx \
     && chown -R user:user /app /run /var/log/supervisor /var/lib/nginx
 
 USER user
