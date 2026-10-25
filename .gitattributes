@@ -1,0 +1,3 @@
+# Shell scripts must keep LF endings so containers can execute them
+*.sh text eol=lf
+Procfile text eol=lf

@@ -1,0 +1,26 @@
+# Never bake into the image (secrets / machine-specific / heavy):
+.env
+.env.*
+!.env.example
+.venv/
+venv/
+data/
+logs/
+uploads/
+ml/models/*.pt
+ml/models/*.pth
+ml/models/*.h5
+ml/models/*.keras
+
+# VCS / tooling:
+.git/
+.gitignore
+.gitattributes
+.pytest_cache/
+.ruff_cache/
+__pycache__/
+*.pyc
+tests/
+pyproject.toml
+README.md
+DEPLOYMENT.md

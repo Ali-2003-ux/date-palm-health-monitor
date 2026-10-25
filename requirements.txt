@@ -1,0 +1,57 @@
+# =====================================================================
+# Date Palm Health Monitoring System — Production Requirements
+# Target platform: Python 3.10 – 3.12 (64-bit)
+#
+# Core install (API + CV + Streamlit dashboard + GLM Vision API client):
+#     pip install -r requirements.txt
+#
+# Optional local CNN inference (MobileNetV2/ResNet via PyTorch, ~2.5 GB):
+#     uncomment the "Local CNN inference" block below
+# =====================================================================
+
+# ------------------------- Web / API layer ---------------------------
+fastapi>=0.115,<1.0
+uvicorn[standard]>=0.32,<1.0
+python-multipart>=0.0.12,<1.0          # multipart/form-data for image uploads
+
+# ------------------------- Validation & configuration ----------------
+pydantic>=2.9,<3.0
+pydantic-settings>=2.6,<3.0
+email-validator>=2.2,<3.0
+
+# ------------------------- Database layer ----------------------------
+SQLAlchemy>=2.0.36,<2.2
+alembic>=1.14,<2.0                     # schema migrations
+psycopg2-binary>=2.9.10,<3.0           # PostgreSQL driver (sync)
+
+# ------------------------- Security / auth ---------------------------
+PyJWT>=2.10,<3.0                       # JWT access tokens
+bcrypt>=4.2,<5.0                       # password hashing (Farmer/Agronomist/Admin)
+
+# ------------------------- Computer vision ---------------------------
+opencv-python-headless>=4.10,<5.0      # image decode/resize/augmentation (server-safe build)
+Pillow>=11.0,<12.0
+numpy>=1.26,<3.0
+
+# ------------------------- Inference backends ------------------------
+httpx>=0.28,<1.0                       # GLM Vision / OpenAI-compatible LLM API client
+tenacity>=8.3,<10.0                    # retry with exponential backoff on API calls
+# --- Optional: local CNN inference (uncomment to enable) -------------
+# torch>=2.5,<3.0
+# torchvision>=0.20,<1.0
+
+# ------------------------- Analytics ---------------------------------
+pandas>=2.2,<3.0
+
+# ------------------------- Frontend (Streamlit) ----------------------
+streamlit>=1.40,<2.0
+streamlit-folium>=0.23,<1.0            # interactive GPS map of palm trees
+folium>=0.18,<1.0
+plotly>=5.24,<7.0                      # health statistics charts
+
+# ------------------------- Utilities ---------------------------------
+python-dateutil>=2.9,<3.0
+
+# ------------------------- Testing & tooling -------------------------
+pytest>=8.3,<9.0
+ruff>=0.7,<1.0

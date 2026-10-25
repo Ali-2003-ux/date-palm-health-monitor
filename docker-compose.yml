@@ -1,0 +1,81 @@
+# =====================================================================
+# Production stack: PostgreSQL + FastAPI + Streamlit dashboard.
+#
+# Required environment variables (set in your shell or a local .env):
+#   SECRET_KEY         python -c "import secrets; print(secrets.token_urlsafe(64))"
+#   POSTGRES_PASSWORD  strong database password
+#
+# Optional:
+#   GLM_API_KEY        z.ai open-platform key (enables real AI diagnosis)
+#   CORS_ORIGINS       JSON list of public dashboard URLs
+#
+#   docker compose up -d --build
+#     API       -> http://localhost:8000/docs
+#     Dashboard -> http://localhost:8501
+# =====================================================================
+
+name: palm-monitor
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: palm
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD, e.g. in .env}
+      POSTGRES_DB: palm_monitor
+    volumes:
+      - palm_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U palm -d palm_monitor"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    build: .
+    restart: unless-stopped
+    command: ["docker/api-entrypoint.sh"]
+    environment:
+      ENVIRONMENT: production
+      DEBUG: "false"
+      SECRET_KEY: '${SECRET_KEY:?set SECRET_KEY first — generate with python -c "import secrets; print(secrets.token_urlsafe(64))"}'
+      DATABASE_URL: postgresql+psycopg2://palm:${POSTGRES_PASSWORD}@db:5432/palm_monitor
+      GLM_API_KEY: ${GLM_API_KEY:-}
+      CORS_ORIGINS: '${CORS_ORIGINS:-["http://localhost:8501"]}'
+      WORKERS: ${WORKERS:-2}
+    volumes:
+      # Inspection photos MUST persist across deploys — attach a volume.
+      - palm_uploads:/app/uploads
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  dashboard:
+    build: .
+    restart: unless-stopped
+    command: >
+      streamlit run frontend/app.py
+      --server.port 8501 --server.address 0.0.0.0
+      --server.headless true --browser.gatherUsageStats false
+    environment:
+      # Server-side calls from the dashboard reach the API on the
+      # compose network; no public URL needed here.
+      STREAMLIT_API_URL: http://api:8000
+    ports:
+      - "8501:8501"
+    depends_on:
+      api:
+        condition: service_healthy
+
+volumes:
+  palm_pgdata:
+  palm_uploads:

@@ -1,0 +1,65 @@
+# Render.com blueprint — deploys the full stack from this repo (free tier).
+#
+# 1. Push this repo to GitHub.
+# 2. Render dashboard -> New -> Blueprint -> select the repo.
+# 3. When prompted, fill the sync:false secrets:
+#      SECRET_KEY  -> long random string
+#      GLM_API_KEY -> your z.ai open-platform key (optional)
+# 4. After the first deploy, two env vars must point at the real public URLs
+#    (copy them from each service's page):
+#      palm-dashboard -> STREAMLIT_API_URL = https://palm-api-xxxx.onrender.com
+#      palm-api       -> CORS_ORIGINS     = ["https://palm-dashboard-xxxx.onrender.com"]
+#    Then trigger a redeploy on both (Manual Deploy -> Deploy latest commit).
+#
+# Free tier notes: services sleep after ~15 min idle (first request takes
+# ~30-60 s to wake), free Postgres expires after 30 days (back up or
+# upgrade), and /app/uploads is EPHEMERAL on free instances — photos are
+# lost on each deploy. For persistence: switch the api service to a paid
+# plan and re-enable the disk block below.
+
+services:
+  - type: web
+    name: palm-api
+    runtime: docker
+    plan: free
+    dockerCommand: ["docker/api-entrypoint.sh"]
+    healthCheckPath: /health
+    # --- uncomment for persistent photo storage (requires paid instance):
+    # disk:
+    #   name: palm-uploads
+    #   mountPath: /app/uploads
+    #   sizeGB: 5
+    envVars:
+      - key: ENVIRONMENT
+        value: production
+      - key: DEBUG
+        value: "false"
+      - key: WORKERS
+        value: "1" # 512 MB free instances
+      - key: SECRET_KEY
+        sync: false
+      - key: GLM_API_KEY
+        sync: false
+      - key: DATABASE_URL
+        fromDatabase:
+          name: palm-db
+          property: connectionString
+      - key: CORS_ORIGINS
+        sync: false # JSON list: ["https://palm-dashboard-xxxx.onrender.com"]
+
+  - type: web
+    name: palm-dashboard
+    runtime: docker
+    plan: free
+    dockerCommand: >
+      streamlit run frontend/app.py --server.port $PORT --server.address 0.0.0.0
+      --server.headless true --browser.gatherUsageStats false
+    envVars:
+      - key: STREAMLIT_API_URL
+        sync: false # https://palm-api-xxxx.onrender.com (copy after first deploy)
+
+databases:
+  - name: palm-db
+    plan: free
+    databaseName: palm_monitor
+    user: palm

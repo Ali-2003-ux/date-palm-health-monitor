@@ -1,0 +1,39 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# --- Environment & secrets ---
+.env
+.env.compose
+
+# --- Runtime artefacts ---
+logs/
+uploads/*
+!uploads/.gitkeep
+ml/models/*.pt
+ml/models/*.pth
+ml/models/*.h5
+ml/models/*.keras
+!ml/models/.gitkeep
+
+# --- Tooling caches ---
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# --- OS / IDE ---
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Local SQLite database
+data/
+
+# Local agent/tool state
+.claude/
+.agents/
