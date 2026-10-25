@@ -19,6 +19,14 @@ class InferenceError(VisionError):
     """An inference provider failed after retries."""
 
 
+class ProviderAuthError(InferenceError):
+    """The provider rejected our credentials (HTTP 401/403).
+
+    Distinguished from transient failures so the API can tell users the
+    truth: 'retry' will not help until the key is fixed.
+    """
+
+
 class ProviderUnavailableError(InferenceError):
     """The configured provider cannot run (missing key, weights or library)."""
 

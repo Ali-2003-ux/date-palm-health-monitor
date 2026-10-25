@@ -17,10 +17,11 @@ import httpx
 class APIError(Exception):
     """A non-2xx response from the backend."""
 
-    def __init__(self, status_code: int, detail: str) -> None:
+    def __init__(self, status_code: int, detail: str, error_code: str | None = None):
         super().__init__(f"HTTP {status_code}: {detail}")
         self.status_code = status_code
         self.detail = detail
+        self.error_code = error_code
 
 
 class PalmMonitorClient:
@@ -63,12 +64,15 @@ class PalmMonitorClient:
 
         if response.status_code >= 400:
             try:
-                detail = response.json().get("detail", response.text)
+                body = response.json()
+                detail = body.get("detail", response.text)
+                error_code = body.get("error_code")
             except ValueError:
                 detail = response.text
+                error_code = None
             if isinstance(detail, list):  # pydantic validation errors
                 detail = "; ".join(str(item) for item in detail)
-            raise APIError(response.status_code, str(detail))
+            raise APIError(response.status_code, str(detail), error_code)
         if response.status_code == 204 or not response.content:
             return None
         return response.json()
@@ -161,6 +165,10 @@ class PalmMonitorClient:
         if status:
             params["status"] = status
         return self._request("GET", "/api/v1/inspections/recent", params=params)
+
+    def vision_status(self) -> dict:
+        """Live health of the AI provider (key configured/reachable/accepted)."""
+        return self._request("GET", "/api/v1/diagnostics/vision")
 
     def get_image_bytes(self, image_url: str) -> bytes:
         """Fetch a stored inspection photo (public /media static route)."""

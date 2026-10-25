@@ -98,6 +98,27 @@ class VisionService:
     # ------------------------------------------------------------------
     # Post-processing policy
     # ------------------------------------------------------------------
+    # Diagnostics
+    # ------------------------------------------------------------------
+    async def provider_status(self) -> dict:
+        """Health of the configured inference provider (for /diagnostics)."""
+        if self._settings.VISION_PROVIDER == "local_cnn":
+            available = self._local is not None or self._settings.MODEL_WEIGHTS_PATH.is_file()
+            return {
+                "provider": "local_cnn",
+                "model": "mobilenetv2",
+                "key_configured": True,
+                "reachable": available,
+                "authenticated": available,
+                "detail": (
+                    "OK — local CNN weights available."
+                    if available
+                    else f"CNN weights not found at {self._settings.MODEL_WEIGHTS_PATH}."
+                ),
+            }
+        return await self._glm.verify_connection()
+
+    # ------------------------------------------------------------------
     def _apply_threshold_policy(self, result: DiagnosisResult) -> None:
         """Flag low-confidence diagnoses so the UI can ask for a re-shoot."""
         threshold = self._settings.CONFIDENCE_THRESHOLD

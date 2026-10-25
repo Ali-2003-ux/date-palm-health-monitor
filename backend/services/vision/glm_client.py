@@ -31,6 +31,7 @@ from backend.services.vision.results import (
     DiagnosisResult,
     ImageQuality,
     InferenceError,
+    ProviderAuthError,
 )
 
 logger = get_logger(__name__)
@@ -181,12 +182,74 @@ class GLMVisionClient:
             raise TransientAPIError(
                 f"GLM API transient failure: HTTP {response.status_code}"
             )
+        if response.status_code in (401, 403):
+            # Credentials rejected — retrying cannot help; surface distinctly.
+            raise ProviderAuthError(
+                f"GLM API key was rejected (HTTP {response.status_code}): "
+                f"{response.text[:200]}"
+            )
         if response.status_code >= 400:
             raise InferenceError(
                 f"GLM API rejected the request: HTTP {response.status_code} — "
                 f"{response.text[:300]}"
             )
         return response
+
+    async def verify_connection(self) -> dict[str, Any]:
+        """Cheap health probe of the provider for diagnostics.
+
+        Sends a 1-token text ping: 401/403 proves a bad key, ANY other
+        HTTP status proves authentication passed (even a 400 about the
+        request shape means the key was accepted).
+        """
+        result: dict[str, Any] = {
+            "provider": "glm",
+            "model": self._settings.GLM_VISION_MODEL,
+            "key_configured": False,
+            "reachable": False,
+            "authenticated": False,
+            "detail": "",
+        }
+        api_key = self._settings.GLM_API_KEY
+        if api_key is None:
+            result["detail"] = (
+                "GLM_API_KEY is not configured — set it in the environment "
+                "and restart the service."
+            )
+            return result
+        result["key_configured"] = True
+
+        probe = {
+            "model": self._settings.GLM_VISION_MODEL,
+            "max_tokens": 1,
+            "messages": [{"role": "user", "content": "ping"}],
+        }
+        try:
+            async with httpx.AsyncClient(
+                base_url=self._settings.GLM_API_BASE.rstrip("/"),
+                headers={"Authorization": f"Bearer {api_key.get_secret_value()}"},
+                timeout=15,
+                transport=self._transport,
+            ) as client:
+                response = await client.post("/chat/completions", json=probe)
+        except httpx.HTTPError as exc:
+            result["detail"] = f"Cannot reach the GLM API: {exc}"
+            return result
+
+        result["reachable"] = True
+        if response.status_code in (401, 403):
+            result["detail"] = (
+                f"API key rejected by the provider (HTTP {response.status_code}). "
+                "Replace GLM_API_KEY with a valid key — retrying will not help."
+            )
+            return result
+        result["authenticated"] = True
+        result["detail"] = (
+            "OK — provider reachable and key accepted."
+            if response.status_code == 200
+            else f"Key accepted (probe returned HTTP {response.status_code})."
+        )
+        return result
 
     @staticmethod
     def _message_content(response: httpx.Response) -> str:

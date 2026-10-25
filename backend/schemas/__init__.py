@@ -1,6 +1,6 @@
 """Pydantic request/response schemas for the API (Step 4)."""
 
-from backend.schemas.inspection import InspectionRead, InspectResponse
+from backend.schemas.inspection import InspectionRead, InspectResponse, VisionStatus
 from backend.schemas.palm import (
     PalmTreeCreate,
     PalmTreeRead,
@@ -17,4 +17,5 @@ __all__ = [
     "Token",
     "UserCreate",
     "UserRead",
+    "VisionStatus",
 ]

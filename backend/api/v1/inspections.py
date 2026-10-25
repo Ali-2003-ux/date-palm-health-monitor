@@ -26,7 +26,7 @@ from backend.core.logging import get_logger
 from backend.core.security import CurrentUser
 from backend.db.session import get_db
 from backend.models import InspectionLog, InspectionStatus, PalmTree, UserRole
-from backend.schemas import InspectionRead, InspectResponse
+from backend.schemas import InspectionRead, InspectResponse, VisionStatus
 from backend.services.storage import save_palm_image
 from backend.services.vision import VisionService
 from backend.services.vision.results import DiagnosisResult
@@ -147,3 +147,19 @@ def recent_inspections(
     if inspection_status is not None:
         query = query.where(InspectionLog.status == inspection_status)
     return list(db.scalars(query.limit(limit)).all())
+
+
+@router.get(
+    "/diagnostics/vision",
+    response_model=VisionStatus,
+    summary="Live health of the AI diagnosis provider",
+)
+async def vision_diagnostics(
+    user: CurrentUser, vision: VisionDep
+) -> VisionStatus:
+    """Probes the configured provider with a minimal request.
+
+    Any authenticated user may call it — it exposes provider health only,
+    never key material. Lets the UI warn before a photo is taken.
+    """
+    return VisionStatus(**await vision.provider_status())

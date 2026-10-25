@@ -286,6 +286,24 @@ def render_map(palms: list[dict]) -> None:
 
 def render_inspect(client: PalmMonitorClient, palms: list[dict]) -> None:
     st.subheader("New AI inspection")
+
+    # Provider health banner — warn BEFORE the user photographs anything.
+    try:
+        provider = client.vision_status()
+        if not provider.get("authenticated"):
+            st.error(
+                f"⚠️ **AI diagnosis is offline** — {provider.get('detail') or 'provider misconfigured'}\n\n"
+                "Inspections will fail until an administrator installs a valid "
+                "GLM API key. You can still register trees and browse history."
+            )
+        else:
+            st.caption(
+                f"✅ Diagnosis provider healthy — {provider.get('model')} "
+                f"({provider.get('provider')})"
+            )
+    except APIError:
+        st.caption("Diagnosis provider status unknown.")
+
     if not palms:
         st.info("Register a palm tree first (Palm Trees page).")
         return
