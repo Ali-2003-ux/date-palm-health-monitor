@@ -1,10 +1,10 @@
-"""GLM-4V vision-language API client.
+"""Vision-API client for any OpenAI-compatible chat endpoint.
 
-Talks to the OpenAI-compatible chat-completions endpoint exposed by the
-GLM service (https://api.z.ai/api/paas/v4). Sends the palm photo as a
-base64 data URL together with a prompt that forces a strict JSON
-verdict, parses the response into a `DiagnosisResult`, and retries
-transient failures (timeouts, 429/5xx) with exponential backoff.
+Production default: the Google Gemini OpenAI-compatible layer
+(https://generativelanguage.googleapis.com/v1beta/openai). Sends the palm
+photo as a base64 data URL together with a prompt that forces a strict
+JSON verdict, parses the response into a `DiagnosisResult`, and retries
+transient failures (429/5xx with Retry-After, timeouts) with backoff.
 """
 
 from __future__ import annotations
@@ -31,6 +31,7 @@ from backend.services.vision.results import (
     DiagnosisResult,
     ImageQuality,
     InferenceError,
+    ProviderAuthError,
 )
 
 logger = get_logger(__name__)
@@ -77,6 +78,23 @@ _RETRYABLE_STATUS = {429, 500, 502, 503, 504}
 class TransientAPIError(InferenceError):
     """Retryable HTTP failure (429/5xx) raised to trigger tenacity."""
 
+    def __init__(self, message: str, retry_after: float | None = None) -> None:
+        super().__init__(message)
+        #: Seconds the provider asked us to wait (Retry-After header).
+        self.retry_after = retry_after
+
+
+def _wait_with_retry_after(retry_state) -> float:
+    """Exponential jitter, raised to the provider's Retry-After when sent."""
+    exponential = wait_exponential_jitter(initial=2.0, max=15.0)(retry_state)
+    outcome = retry_state.outcome
+    if outcome is not None and outcome.failed:
+        exc = outcome.exception()
+        retry_after = getattr(exc, "retry_after", None)
+        if retry_after:
+            return max(exponential, float(retry_after))
+    return exponential
+
 
 class GLMVisionClient:
     """Async client for the GLM-4V chat-completions endpoint."""
@@ -85,7 +103,7 @@ class GLMVisionClient:
         self,
         settings: Settings | None = None,
         transport: httpx.AsyncBaseTransport | None = None,
-        max_attempts: int = 3,
+        max_attempts: int = 4,
         initial_retry_wait: float = 1.0,
     ) -> None:
         self._settings = settings or get_settings()
@@ -97,11 +115,15 @@ class GLMVisionClient:
     # Public API
     # ------------------------------------------------------------------
     async def analyze(
-        self, jpeg_bytes: bytes, quality: ImageQuality, filename: str = "image.jpg"
+        self,
+        jpeg_bytes: bytes,
+        quality: ImageQuality,
+        filename: str = "image.jpg",
+        context_note: str | None = None,
     ) -> DiagnosisResult:
         """Run the diagnosis request and return the structured result."""
         started = time.monotonic()
-        content = await self._request_completion(jpeg_bytes)
+        content = await self._request_completion(jpeg_bytes, context_note)
         payload = self._extract_json(content)
         result = self._to_result(
             payload, quality, started, model=self._settings.GLM_VISION_MODEL
@@ -120,7 +142,9 @@ class GLMVisionClient:
     # ------------------------------------------------------------------
     # HTTP layer
     # ------------------------------------------------------------------
-    async def _request_completion(self, jpeg_bytes: bytes) -> str:
+    async def _request_completion(
+        self, jpeg_bytes: bytes, context_note: str | None = None
+    ) -> str:
         """POST the image to the API with retries; returns message content."""
         api_key = self._settings.GLM_API_KEY
         if api_key is None:
@@ -129,9 +153,20 @@ class GLMVisionClient:
                 "GLM vision provider."
             )
 
+        prompt_text = USER_PROMPT
+        if context_note:
+            prompt_text += (
+                f"\n\nRegistered tree context (trust but verify visually): "
+                f"{context_note}"
+            )
+
         request_body = {
             "model": self._settings.GLM_VISION_MODEL,
             "temperature": 0.1,
+            # Explicit budget: thinking models (e.g. gemini-2.5-flash) spend
+            # output tokens on internal reasoning — an unset/low cap truncates
+            # the JSON verdict mid-object.
+            "max_tokens": 3000,
             "messages": [
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {
@@ -141,7 +176,7 @@ class GLMVisionClient:
                             "type": "image_url",
                             "image_url": {"url": to_data_url(jpeg_bytes)},
                         },
-                        {"type": "text", "text": USER_PROMPT},
+                        {"type": "text", "text": prompt_text},
                     ],
                 },
             ],
@@ -159,7 +194,7 @@ class GLMVisionClient:
                         (TransientAPIError, httpx.TimeoutException, httpx.TransportError)
                     ),
                     stop=stop_after_attempt(self._max_attempts),
-                    wait=wait_exponential_jitter(multiplier=self._initial_retry_wait),
+                    wait=_wait_with_retry_after,
                     reraise=True,
                 )
                 response = await strategy.__call__(
@@ -178,8 +213,27 @@ class GLMVisionClient:
         """Single POST attempt; raises TransientAPIError on 429/5xx."""
         response = await client.post("/chat/completions", json=request_body)
         if response.status_code in _RETRYABLE_STATUS:
+            retry_after = None
+            header = response.headers.get("Retry-After")
+            if header:
+                try:  # both seconds-form and HTTP-date form exist; use seconds
+                    retry_after = min(float(header), 30.0)
+                except ValueError:
+                    retry_after = None
             raise TransientAPIError(
-                f"GLM API transient failure: HTTP {response.status_code}"
+                f"GLM API transient failure: HTTP {response.status_code}",
+                retry_after=retry_after,
+            )
+        if response.status_code in (401, 403) or (
+            response.status_code == 400
+            and "api key" in response.text.lower()
+        ):
+            # Credentials rejected — retrying cannot help; surface distinctly.
+            # Gemini quirk: invalid keys arrive as 400 INVALID_ARGUMENT,
+            # not 401.
+            raise ProviderAuthError(
+                f"Vision API key was rejected (HTTP {response.status_code}): "
+                f"{response.text[:200]}"
             )
         if response.status_code >= 400:
             raise InferenceError(
@@ -187,6 +241,62 @@ class GLMVisionClient:
                 f"{response.text[:300]}"
             )
         return response
+
+    async def verify_connection(self) -> dict[str, Any]:
+        """Cheap health probe of the provider for diagnostics.
+
+        Sends a 1-token text ping: 401/403 proves a bad key, ANY other
+        HTTP status proves authentication passed (even a 400 about the
+        request shape means the key was accepted).
+        """
+        result: dict[str, Any] = {
+            "provider": "glm",
+            "model": self._settings.GLM_VISION_MODEL,
+            "key_configured": False,
+            "reachable": False,
+            "authenticated": False,
+            "detail": "",
+        }
+        api_key = self._settings.GLM_API_KEY
+        if api_key is None:
+            result["detail"] = (
+                "GLM_API_KEY is not configured — set it in the environment "
+                "and restart the service."
+            )
+            return result
+        result["key_configured"] = True
+
+        probe = {
+            "model": self._settings.GLM_VISION_MODEL,
+            "max_tokens": 1,
+            "messages": [{"role": "user", "content": "ping"}],
+        }
+        try:
+            async with httpx.AsyncClient(
+                base_url=self._settings.GLM_API_BASE.rstrip("/"),
+                headers={"Authorization": f"Bearer {api_key.get_secret_value()}"},
+                timeout=15,
+                transport=self._transport,
+            ) as client:
+                response = await client.post("/chat/completions", json=probe)
+        except httpx.HTTPError as exc:
+            result["detail"] = f"Cannot reach the GLM API: {exc}"
+            return result
+
+        result["reachable"] = True
+        if response.status_code in (401, 403):
+            result["detail"] = (
+                f"API key rejected by the provider (HTTP {response.status_code}). "
+                "Replace GLM_API_KEY with a valid key — retrying will not help."
+            )
+            return result
+        result["authenticated"] = True
+        result["detail"] = (
+            "OK — provider reachable and key accepted."
+            if response.status_code == 200
+            else f"Key accepted (probe returned HTTP {response.status_code})."
+        )
+        return result
 
     @staticmethod
     def _message_content(response: httpx.Response) -> str:
@@ -275,6 +385,20 @@ class GLMVisionClient:
         assessment = payload.get("assessment")
         assessment = str(assessment) if assessment else None
 
+        # Knowledge-base grounding: cause + prevention come from the catalog
+        # when the disease is known (the model may add detail via symptoms).
+        cause = catalog_entry.cause if catalog_entry else None
+        if catalog_entry:
+            prevention = list(catalog_entry.prevention)
+        elif not is_healthy:
+            prevention = [
+                ("Re-inspect the palm within 2 weeks and photograph any "
+                "change."),
+                "Consult a local agronomist for an on-site confirmation.",
+            ]
+        else:
+            prevention = []
+
         return DiagnosisResult(
             detected_disease=display_name,
             severity=None if is_healthy else severity,
@@ -282,6 +406,8 @@ class GLMVisionClient:
             status=status,
             symptoms=symptoms,
             treatment_steps=treatment_steps,
+            cause=cause,
+            prevention=prevention,
             assessment=assessment,
             provider="glm",
             model=model,

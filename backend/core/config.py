@@ -82,10 +82,14 @@ class Settings(BaseSettings):
     # ------------------------------------------------------------------
     # AI inference (implemented in Step 3)
     # ------------------------------------------------------------------
-    VISION_PROVIDER: Literal["glm", "local_cnn"] = "glm"
+    VISION_PROVIDER: Literal["glm", "local_cnn", "local_vlm"] = "glm"
+    #: OpenAI-compatible vision provider. Production default: Google Gemini.
     GLM_API_KEY: SecretStr | None = None
-    GLM_API_BASE: str = "https://api.z.ai/api/paas/v4"
-    GLM_VISION_MODEL: str = "glm-4v-plus"
+    GLM_API_BASE: str = "https://generativelanguage.googleapis.com/v1beta/openai"
+    GLM_VISION_MODEL: str = "gemini-2.5-flash"
+    #: Open-source local VLM (keyless) — weights under MODEL_CACHE_DIR.
+    LOCAL_VLM_MODEL: str = "HuggingFaceTB/SmolVLM-500M-Instruct"
+    MODEL_CACHE_DIR: Path = BASE_DIR / "ml" / "models" / "hf"
     INFERENCE_TIMEOUT_SECONDS: int = Field(default=60, ge=1, le=600)
     CONFIDENCE_THRESHOLD: float = Field(default=0.60, ge=0.0, le=1.0)
     MODEL_WEIGHTS_PATH: Path = BASE_DIR / "ml" / "models" / "mobilenetv2_palm_best.pt"

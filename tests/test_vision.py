@@ -33,6 +33,7 @@ from backend.services.vision.preprocessing import (
     resize_max_side,
     to_data_url,
 )
+from tests.conftest import UnavailableVLM
 
 # ----------------------------------------------------------------------
 # Helpers: synthetic but real images (drawn with OpenCV, no fixtures)
@@ -303,6 +304,7 @@ def make_service(handler) -> VisionService:
             initial_retry_wait=0.01,
         ),
         local_predictor=None,  # no torch => fallback disabled in tests
+        local_vlm=UnavailableVLM(settings),
     )
 
 

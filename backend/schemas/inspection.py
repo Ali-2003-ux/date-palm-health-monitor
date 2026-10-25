@@ -42,3 +42,14 @@ class InspectResponse(BaseModel):
 
     diagnosis: DiagnosisResult
     inspection: InspectionRead
+
+
+class VisionStatus(BaseModel):
+    """Live health of the AI inference provider."""
+
+    provider: str
+    model: str
+    key_configured: bool
+    reachable: bool
+    authenticated: bool
+    detail: str

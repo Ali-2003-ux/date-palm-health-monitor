@@ -6,7 +6,11 @@ from fastapi import FastAPI, Request, status
 from fastapi.responses import JSONResponse
 
 from backend.core.logging import get_logger
-from backend.services.vision.results import InferenceError, InvalidImageError
+from backend.services.vision.results import (
+    InferenceError,
+    InvalidImageError,
+    ProviderAuthError,
+)
 
 logger = get_logger(__name__)
 
@@ -21,6 +25,23 @@ def register_exception_handlers(app: FastAPI) -> None:
         return JSONResponse(
             status_code=status.HTTP_400_BAD_REQUEST,
             content={"detail": f"Invalid image: {exc}"},
+        )
+
+    @app.exception_handler(ProviderAuthError)
+    async def provider_auth_handler(
+        request: Request, exc: ProviderAuthError
+    ) -> JSONResponse:
+        logger.error("Vision provider rejected credentials on %s", request.url.path)
+        return JSONResponse(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            content={
+                "detail": (
+                    "AI diagnosis is not available: the vision-provider API key "
+                    "was rejected. This needs an administrator to install a "
+                    "valid key — retrying will not fix it."
+                ),
+                "error_code": "vision_provider_auth",
+            },
         )
 
     @app.exception_handler(InferenceError)

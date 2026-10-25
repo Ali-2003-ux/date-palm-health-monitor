@@ -26,7 +26,7 @@ from backend.core.logging import get_logger
 from backend.core.security import CurrentUser
 from backend.db.session import get_db
 from backend.models import InspectionLog, InspectionStatus, PalmTree, UserRole
-from backend.schemas import InspectionRead, InspectResponse
+from backend.schemas import InspectionRead, InspectResponse, VisionStatus
 from backend.services.storage import save_palm_image
 from backend.services.vision import VisionService
 from backend.services.vision.results import DiagnosisResult
@@ -85,10 +85,20 @@ async def inspect(
 
     image_bytes = await image.read()
 
+    # Ground the model agronomically: registered variety/field/planted year.
+    context_bits = [f"tree code {palm.tree_code}"]
+    if palm.variety:
+        context_bits.append(f"variety {palm.variety}")
+    if palm.field_name:
+        context_bits.append(f"field '{palm.field_name}'")
+    if palm.planted_on:
+        context_bits.append(f"planted {palm.planted_on.isoformat()}")
+    context_note = "; ".join(context_bits)
+
     # VisionService raises InvalidImageError / InferenceError — mapped to
     # HTTP responses by the exception handlers in backend/api/errors.py.
     diagnosis: DiagnosisResult = await vision.analyze(
-        image_bytes, filename=image.filename or "upload"
+        image_bytes, filename=image.filename or "upload", context_note=context_note
     )
 
     stored_path = save_palm_image(palm.tree_code, image_bytes)
@@ -147,3 +157,19 @@ def recent_inspections(
     if inspection_status is not None:
         query = query.where(InspectionLog.status == inspection_status)
     return list(db.scalars(query.limit(limit)).all())
+
+
+@router.get(
+    "/diagnostics/vision",
+    response_model=VisionStatus,
+    summary="Live health of the AI diagnosis provider",
+)
+async def vision_diagnostics(
+    user: CurrentUser, vision: VisionDep
+) -> VisionStatus:
+    """Probes the configured provider with a minimal request.
+
+    Any authenticated user may call it — it exposes provider health only,
+    never key material. Lets the UI warn before a photo is taken.
+    """
+    return VisionStatus(**await vision.provider_status())

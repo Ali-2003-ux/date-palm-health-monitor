@@ -285,7 +285,36 @@ def render_map(palms: list[dict]) -> None:
 
 
 def render_inspect(client: PalmMonitorClient, palms: list[dict]) -> None:
-    st.subheader("New AI inspection")
+    st.subheader("New AI inspection · فحص جديد")
+
+    # Provider health banner — tell the user which engine they'll get
+    # BEFORE they photograph anything.
+    try:
+        provider = client.vision_status()
+        if provider.get("provider") == "local_vlm":
+            st.info(
+                "ℹ️ **Local screening mode** — the cloud AI engine is "
+                "temporarily unavailable (quota or connectivity). Inspections "
+                "will use the on-device screening model: verdicts are "
+                "provisional, so photograph the affected area up close.\n\n"
+                "*وضع الفحص المحلي: المحرك السحابي غير متاح مؤقتاً، وسيُستخدم "
+                "نموذج فرز محلي. النتائج مبدئية — صوّر المنطقة المصابة عن قرب.*"
+            )
+        elif not provider.get("authenticated"):
+            st.error(
+                f"⚠️ **AI diagnosis is offline** — {provider.get('detail') or 'provider misconfigured'}\n\n"
+                "Inspections will fail until an administrator installs a valid "
+                "API key. You can still register trees and browse history."
+            )
+        else:
+            st.success(
+                f"✨ **Premium AI engine active** — Google Gemini "
+                f"(`{provider.get('model')}`): high-accuracy diagnosis with "
+                "detailed agronomic insights."
+            )
+    except APIError:
+        st.caption("Diagnosis provider status unknown.")
+
     if not palms:
         st.info("Register a palm tree first (Palm Trees page).")
         return
@@ -294,7 +323,16 @@ def render_inspect(client: PalmMonitorClient, palms: list[dict]) -> None:
         f"{p['tree_code']} — {p.get('variety') or 'unknown variety'}": p
         for p in palms
     }
-    selected_label = st.selectbox("Palm tree", list(options))
+    preselected = st.session_state.pop("preselected_palm_id", None)
+    default_index = 0
+    if preselected:
+        for index, key in enumerate(options):
+            if options[key]["id"] == preselected:
+                default_index = index
+                break
+    selected_label = st.selectbox(
+        "Palm tree · اختر الشجرة", list(options), index=default_index
+    )
     palm = options[selected_label]
 
     upload_tab, camera_tab = st.tabs(["📤 Upload photo", "📸 Live camera"])
@@ -351,16 +389,37 @@ def render_diagnosis_report(report: dict) -> None:
     status = diagnosis["status"]
     color, label = STATUS_COLORS[status]
     confidence = diagnosis["confidence"]
+    provider = diagnosis.get("provider", "")
+    is_cloud = provider == "glm"  # Gemini (or any cloud vision API)
 
     st.markdown(
         f"<div class='palm-card' style='border-left:6px solid {color}'>"
         f"<h3>{label} — {diagnosis['detected_disease'] or 'No disease detected'}</h3>"
         f"<p>Confidence <b>{confidence * 100:.0f}%</b> · severity "
-        f"<b>{SEVERITY_BADGES.get(diagnosis['severity'], '—')}</b> · "
-        f"model {diagnosis['model']} ({diagnosis['latency_ms']} ms)</p></div>",
+        f"<b>{SEVERITY_BADGES.get(diagnosis['severity'], '—')}</b></p></div>",
         unsafe_allow_html=True,
     )
     st.progress(min(confidence, 1.0), text=f"Confidence {confidence * 100:.0f}%")
+
+    # --- Provider badge: premium (Gemini) vs local screening fallback ---
+    if is_cloud:
+        st.success(
+            f"✨ **Premium AI diagnosis** — Google Gemini "
+            f"(`{diagnosis['model']}`) · {diagnosis['latency_ms'] / 1000:.1f}s · "
+            f"full agronomic analysis with detailed insights"
+        )
+    else:
+        st.info(
+            "ℹ️ **Lightweight local screening** — the high-accuracy cloud "
+            "model is temporarily unavailable, so this verdict comes from "
+            "the on-device screening model.\n\n"
+            "**Tip:** upload a closer, clearer photo of the affected area "
+            "(trunk base, crown, or individual fronds) for higher accuracy. "
+            "The verdict is provisional — confirm with an agronomist.\n\n"
+            "*تنبيه: هذه نتيجة فحص أوّلي من نموذج محلي خفيف. للحصول على دقة "
+            "أعلى، ارفع صورة أقرب وأوضح للمنطقة المصابة، وتأكد من النتيجة مع "
+            "مهندس زراعي.*"
+        )
 
     left, right = st.columns([1, 2])
     with left:
@@ -371,19 +430,89 @@ def render_diagnosis_report(report: dict) -> None:
             )
         except APIError:
             st.caption("(stored photo unavailable)")
+        _quick_actions(report)
+
     with right:
+        # --- Structured agronomic cards ---
+        if diagnosis.get("cause"):
+            with st.container(border=True):
+                st.markdown(f"**🧬 Cause · السبب**\n\n{diagnosis['cause']}")
         if diagnosis["symptoms"]:
-            st.markdown("**Observed symptoms**")
-            for symptom in diagnosis["symptoms"]:
-                st.markdown(f"- {symptom}")
+            with st.container(border=True):
+                st.markdown("**🔍 Observed symptoms · الأعراض**")
+                for symptom in diagnosis["symptoms"]:
+                    st.markdown(f"- {symptom}")
         if diagnosis["treatment_steps"]:
-            st.markdown("**Recommended treatment**")
-            for number, step in enumerate(diagnosis["treatment_steps"], start=1):
-                st.markdown(f"{number}. {step}")
+            with st.container(border=True):
+                st.markdown("**💊 Treatment · العلاج**")
+                for number, step in enumerate(diagnosis["treatment_steps"], start=1):
+                    st.markdown(f"{number}. {step}")
+        if diagnosis.get("prevention"):
+            with st.container(border=True):
+                st.markdown("**🛡️ Preventive measures · الوقاية**")
+                for measure in diagnosis["prevention"]:
+                    st.markdown(f"- {measure}")
         if diagnosis.get("assessment"):
             st.info(diagnosis["assessment"])
         for warning in diagnosis.get("warnings", []):
             st.warning(warning)
+
+
+def _quick_actions(report: dict) -> None:
+    """Quick action buttons under the photo."""
+    diagnosis = report["diagnosis"]
+    inspection = report["inspection"]
+
+    st.markdown("**⚡ Quick actions · إجراءات سريعة**")
+    if st.button("🔍 Re-inspect this tree", use_container_width=True,
+                 help="افحص هذا الشجرة مرة أخرى"):
+        st.session_state.force_page = "🔍 New inspection"
+        st.session_state.preselect_palm = inspection["palm_tree_id"]
+        st.rerun()
+
+    checklist = "\n".join(
+        f"{i}. {step}" for i, step in enumerate(diagnosis.get("treatment_steps") or [], 1)
+    ) or "No treatment required — maintain routine care."
+    st.download_button(
+        "📄 Download report",
+        data=_report_markdown(report),
+        file_name=f"palm-report-{inspection['id'][:8]}.md",
+        mime="text/markdown",
+        use_container_width=True,
+        help="حمّل التقرير الكامل",
+    )
+    with st.expander("📋 Copy treatment checklist · نسخ خطة العلاج"):
+        st.code(checklist or "—", language="markdown")
+
+
+def _report_markdown(report: dict) -> str:
+    """Full diagnosis report as downloadable Markdown."""
+    diagnosis = report["diagnosis"]
+    inspection = report["inspection"]
+    lines = [
+        "# 🌴 Date Palm Health Report",
+        "",
+        f"- **Inspected:** {inspection['inspected_at'][:16].replace('T', ' ')} UTC",
+        f"- **Verdict:** {diagnosis['status'].upper()}",
+        f"- **Disease:** {diagnosis.get('detected_disease') or 'None detected'}",
+        f"- **Severity:** {diagnosis.get('severity') or '—'}",
+        f"- **Confidence:** {diagnosis['confidence'] * 100:.0f}%",
+        f"- **Engine:** {diagnosis.get('provider')} / {diagnosis.get('model')}",
+        "",
+    ]
+    if diagnosis.get("cause"):
+        lines += ["## Cause", diagnosis["cause"], ""]
+    if diagnosis.get("symptoms"):
+        lines += ["## Symptoms"] + [f"- {s}" for s in diagnosis["symptoms"]] + [""]
+    if diagnosis.get("treatment_steps"):
+        lines += ["## Treatment"] + [
+            f"{i}. {s}" for i, s in enumerate(diagnosis["treatment_steps"], 1)
+        ] + [""]
+    if diagnosis.get("prevention"):
+        lines += ["## Prevention"] + [f"- {s}" for s in diagnosis["prevention"]] + [""]
+    if diagnosis.get("assessment"):
+        lines += ["## Assessment", diagnosis["assessment"], ""]
+    return "\n".join(lines)
 
 
 def client_image_bytes(image_url: str) -> bytes:
@@ -536,13 +665,24 @@ def main() -> None:
         st.markdown("## 🌴 Palm Monitor")
         st.caption(f"{user['full_name']} · {user['role'].title()}")
         st.divider()
+        nav_options = ["📊 Dashboard", "🔍 New inspection", "🌳 Palm trees", "🚨 Alerts"]
+        current = st.session_state.get("force_page") or "📊 Dashboard"
+        if current not in nav_options:
+            current = "📊 Dashboard"
         page = st.radio(
             "Navigation",
-            ["📊 Dashboard", "🔍 New inspection", "🌳 Palm trees", "🚨 Alerts"],
+            nav_options,
+            index=nav_options.index(current),
             label_visibility="collapsed",
+            help="التنقل: لوحة المزرعة · فحص جديد · أشجار النخيل · التنبيهات",
+        )
+        st.session_state.pop("force_page", None)
+        st.caption(
+            "📊 لوحة المزرعة · 🔍 فحص جديد · 🌳 أشجار النخيل · 🚨 التنبيهات"
         )
         st.divider()
-        if st.button("Sign out", use_container_width=True):
+        if st.button("Sign out", use_container_width=True,
+                     help="تسجيل الخروج"):
             st.session_state.clear()
             st.rerun()
 
@@ -558,6 +698,12 @@ def main() -> None:
         except APIError as exc:
             st.error(exc.detail)
             palms = []
+        preselect = st.session_state.pop("preselect_palm", None)
+        if preselect:
+            for palm in palms:
+                if palm["id"] == preselect:
+                    st.session_state["preselected_palm_id"] = preselect
+                    break
         render_inspect(client, palms)
     elif page == "🌳 Palm trees":
         render_trees(client)

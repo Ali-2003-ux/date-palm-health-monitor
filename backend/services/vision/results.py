@@ -19,6 +19,14 @@ class InferenceError(VisionError):
     """An inference provider failed after retries."""
 
 
+class ProviderAuthError(InferenceError):
+    """The provider rejected our credentials (HTTP 401/403).
+
+    Distinguished from transient failures so the API can tell users the
+    truth: 'retry' will not help until the key is fixed.
+    """
+
+
 class ProviderUnavailableError(InferenceError):
     """The configured provider cannot run (missing key, weights or library)."""
 
@@ -52,6 +60,10 @@ class DiagnosisResult(BaseModel):
     status: InspectionStatus
     symptoms: list[str] = Field(default_factory=list)
     treatment_steps: list[str] = Field(default_factory=list)
+    #: Causal agent / mechanism (knowledge-base grounded when known).
+    cause: str | None = None
+    #: Preventive measures (knowledge-base grounded when known).
+    prevention: list[str] = Field(default_factory=list)
     assessment: str | None = None
     provider: str
     model: str
