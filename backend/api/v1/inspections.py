@@ -85,10 +85,20 @@ async def inspect(
 
     image_bytes = await image.read()
 
+    # Ground the model agronomically: registered variety/field/planted year.
+    context_bits = [f"tree code {palm.tree_code}"]
+    if palm.variety:
+        context_bits.append(f"variety {palm.variety}")
+    if palm.field_name:
+        context_bits.append(f"field '{palm.field_name}'")
+    if palm.planted_on:
+        context_bits.append(f"planted {palm.planted_on.isoformat()}")
+    context_note = "; ".join(context_bits)
+
     # VisionService raises InvalidImageError / InferenceError — mapped to
     # HTTP responses by the exception handlers in backend/api/errors.py.
     diagnosis: DiagnosisResult = await vision.analyze(
-        image_bytes, filename=image.filename or "upload"
+        image_bytes, filename=image.filename or "upload", context_note=context_note
     )
 
     stored_path = save_palm_image(palm.tree_code, image_bytes)

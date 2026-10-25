@@ -51,9 +51,16 @@ class VisionService:
     # Public API
     # ------------------------------------------------------------------
     async def analyze(
-        self, image_bytes: bytes, filename: str = "image.jpg"
+        self,
+        image_bytes: bytes,
+        filename: str = "image.jpg",
+        context_note: str | None = None,
     ) -> DiagnosisResult:
-        """Preprocess, diagnose and return the structured result."""
+        """Preprocess, diagnose and return the structured result.
+
+        `context_note` carries registered tree metadata (variety, field) so
+        vision providers can ground their verdict agronomically.
+        """
         if len(image_bytes) > self._settings.max_upload_size_bytes:
             raise InvalidImageError(
                 f"Image is {len(image_bytes) / 1_048_576:.1f} MB; the limit is "
@@ -63,14 +70,16 @@ class VisionService:
         image, quality = preprocess(image_bytes)
         jpeg = encode_jpeg(image)
 
-        result = await self._diagnose(jpeg, image, quality, filename)
+        result = await self._diagnose(jpeg, image, quality, filename, context_note)
         self._apply_threshold_policy(result)
         return result
 
     # ------------------------------------------------------------------
     # Provider dispatch
     # ------------------------------------------------------------------
-    async def _diagnose(self, jpeg, image, quality, filename) -> DiagnosisResult:
+    async def _diagnose(
+        self, jpeg, image, quality, filename, context_note: str | None = None
+    ) -> DiagnosisResult:
         provider = self._settings.VISION_PROVIDER
 
         if provider == "local_vlm":
@@ -78,9 +87,11 @@ class VisionService:
         if provider == "local_cnn":
             return await self._run_local(image, quality)
 
-        # Primary: GLM-4V API. Degrade to local providers on failure.
+        # Primary: GLM-4V / Gemini API. Degrade to local providers on failure.
         try:
-            return await self._glm.analyze(jpeg, quality, filename)
+            return await self._glm.analyze(
+                jpeg, quality, filename, context_note=context_note
+            )
         except InferenceError as exc:
             logger.warning("GLM provider failed (%s); trying local fallbacks.", exc)
             for fallback in (self._run_vlm, self._run_local):
