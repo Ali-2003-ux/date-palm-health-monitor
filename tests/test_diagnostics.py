@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 
 from tests.conftest import (
     TEST_SETTINGS,
+    UnavailableVLM,
     auth,
     create_palm,
     healthy_payload,
@@ -47,6 +48,7 @@ def _install(client_mockable, handler):
             initial_retry_wait=0.01,
         ),
         local_predictor=None,
+        local_vlm=UnavailableVLM(TEST_SETTINGS),
     )
     app.dependency_overrides[get_vision_service] = lambda: service
 
@@ -113,6 +115,7 @@ def test_inspect_auth_failure_returns_error_code(client: TestClient) -> None:
             initial_retry_wait=0.01,
         ),
         local_predictor=None,
+        local_vlm=UnavailableVLM(TEST_SETTINGS),
     )
 
     response = client.post(

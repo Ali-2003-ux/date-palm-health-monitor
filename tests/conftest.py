@@ -24,6 +24,7 @@ from backend.db.base import Base
 from backend.db.session import get_db
 from backend.main import app
 from backend.services.vision import GLMVisionClient, VisionService
+from backend.services.vision.local_vlm import LocalVLM
 from backend.services.vision.service import get_vision_service
 
 TEST_SETTINGS = Settings(GLM_API_KEY=SecretStr("unit-test-key"))
@@ -51,6 +52,14 @@ def healthy_payload(confidence: float = 0.97) -> dict:
         "treatment_steps": [],
         "assessment": "Palm appears vigorous.",
     }
+
+
+class UnavailableVLM(LocalVLM):
+    """Deterministic provider stub: fallback disabled in tests."""
+
+    @property
+    def available(self) -> bool:
+        return False
 
 
 class GLMMock:
@@ -135,6 +144,7 @@ def client(
                 initial_retry_wait=0.01,
             ),
             local_predictor=None,
+            local_vlm=UnavailableVLM(TEST_SETTINGS),
         )
 
     app.dependency_overrides[get_db] = override_get_db

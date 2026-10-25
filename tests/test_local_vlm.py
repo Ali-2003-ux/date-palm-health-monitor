@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 
 import pytest
 
@@ -70,7 +71,9 @@ class UnavailableVLM(LocalVLM):
 
 
 def test_settings_accept_local_vlm_provider() -> None:
-    settings = Settings(VISION_PROVIDER="local_vlm")
+    settings = Settings(
+        VISION_PROVIDER="local_vlm", MODEL_CACHE_DIR=Path("ml/models/hf")
+    )
     assert settings.LOCAL_VLM_MODEL.startswith("HuggingFaceTB/")
     assert settings.MODEL_CACHE_DIR.as_posix().endswith("ml/models/hf")
 
