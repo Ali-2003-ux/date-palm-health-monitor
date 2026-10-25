@@ -133,6 +133,10 @@ class GLMVisionClient:
         request_body = {
             "model": self._settings.GLM_VISION_MODEL,
             "temperature": 0.1,
+            # Explicit budget: thinking models (e.g. gemini-2.5-flash) spend
+            # output tokens on internal reasoning — an unset/low cap truncates
+            # the JSON verdict mid-object.
+            "max_tokens": 3000,
             "messages": [
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {

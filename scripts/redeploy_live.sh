@@ -33,14 +33,19 @@ if [ -d "$MODEL_DIR" ]; then
   MODEL_MOUNT="-v $(cygpath -w "$MODEL_DIR" 2>/dev/null || echo "$MODEL_DIR"):/app/ml/models/hf"
 fi
 
+# Primary provider: Google Gemini (OpenAI-compatible endpoint) — high
+# accuracy, detailed verdicts. On failure the service degrades to the
+# local SmolVLM automatically (built-in fallback chain).
 # STREAMLIT_API_URL points at the in-container nginx loopback: the dashboard
 # never depends on the public tunnel for API calls.
 docker run -d --name palm-live --restart unless-stopped -p 7860:7860 \
   -e DATABASE_URL="$(cat data/neon_url.txt)" \
   -e SECRET_KEY="$(cat data/secret_key.txt)" \
   $GLM_ARG \
-  -e VISION_PROVIDER=local_vlm \
-  -e INFERENCE_TIMEOUT_SECONDS=180 \
+  -e VISION_PROVIDER=glm \
+  -e GLM_API_BASE=https://generativelanguage.googleapis.com/v1beta/openai \
+  -e GLM_VISION_MODEL=gemini-2.5-flash \
+  -e INFERENCE_TIMEOUT_SECONDS=120 \
   -e ENVIRONMENT=production \
   -e DEBUG=false \
   -e STREAMLIT_API_URL=http://localhost:7860 \
