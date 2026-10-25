@@ -134,12 +134,14 @@ class Settings(BaseSettings):
     def database_url(self) -> str:
         """SQLAlchemy connection URL using the sync psycopg2 driver."""
         if self.DATABASE_URL:
-            # Managed platforms (Render, Heroku) inject `postgres://` URLs;
-            # SQLAlchemy needs the driver-prefixed form.
-            if self.DATABASE_URL.startswith("postgres://"):
-                return self.DATABASE_URL.replace(
-                    "postgres://", "postgresql+psycopg2://", 1
-                )
+            # Managed platforms (Render, Heroku, Neon) inject `postgres://`
+            # or bare `postgresql://` URLs; SQLAlchemy 2.x needs the driver
+            # pinned or it defaults to psycopg3 (not installed).
+            for prefix in ("postgres://", "postgresql://"):
+                if self.DATABASE_URL.startswith(prefix):
+                    return self.DATABASE_URL.replace(
+                        prefix, "postgresql+psycopg2://", 1
+                    )
             return self.DATABASE_URL
         password = quote_plus(self.POSTGRES_PASSWORD.get_secret_value())
         user = quote_plus(self.POSTGRES_USER)
