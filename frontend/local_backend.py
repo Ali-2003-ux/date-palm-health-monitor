@@ -13,6 +13,7 @@ import base64
 import uuid
 from datetime import UTC, datetime
 from decimal import Decimal
+from pathlib import Path
 from typing import Any
 
 from sqlalchemy import select
@@ -52,7 +53,8 @@ class LocalBackend:
         from alembic.config import Config as AlembicConfig
 
         try:  # idempotent — Neon is already migrated; covers fresh forks
-            alembic_command.upgrade(AlembicConfig("alembic.ini"), "head")
+            alembic_path = str(Path(__file__).resolve().parents[1] / "alembic.ini")
+            alembic_command.upgrade(AlembicConfig(alembic_path), "head")
         except Exception as exc:  # noqa: BLE001 - never block boot on this
             logger.warning("startup migration skipped: %s", exc)
 
